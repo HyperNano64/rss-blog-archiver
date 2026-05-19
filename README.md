@@ -1,9 +1,10 @@
 # rss-blog-archiver
 
-> Modern, robust archiver for **Blogspot** and **WordPress** blogs.
-> Exports posts as PDF / EPUB / Markdown / plain text, downloads images,
-> supports resume, label filtering, and parallel scraping. Windows-first
-> but fully cross-platform.
+> Modern, robust archiver for **Blogspot** and **WordPress** blogs, with
+> dedicated **novel** and **comic / manga** modes. Exports posts as
+> PDF / EPUB / Markdown / plain text / CBZ, downloads images, supports
+> resume, label filtering, date range filtering, parallel scraping,
+> and an interactive picker. Windows-first but fully cross-platform.
 
 ## Why
 
@@ -54,43 +55,73 @@ brew install --cask wkhtmltopdf             # macOS
 
 ```bash
 # Show available labels first
-rss-blog-archiver https://example.blogspot.com/ --list-labels
+rba https://example.blogspot.com/ --list-labels
 
-# Archive entire blog as Markdown
-rss-blog-archiver https://example.blogspot.com/ --mode MD
+# List every post title with index/date (great with --label / --since / --until)
+rba https://example.blogspot.com/ --list-titles --label "Novel A"
 
-# Archive only posts under a specific label, as EPUB, with images
-rss-blog-archiver https://example.blogspot.com/ \
-    --mode EPUB \
-    --label "Indonesia" \
-    --max-posts 50
+# Default mode: archive entire blog as Markdown (Phase 0 behavior)
+rba https://example.blogspot.com/ --format MD
 
-# WordPress site, PDF output, polite rate limit
-rss-blog-archiver https://wp.example.com/ \
-    --mode PDF \
-    --rate-limit 1.5 \
-    --output-dir D:\Archive\wp_example
+# Novel mode + EPUB, combined into a single book
+rba https://example.blogspot.com/ \
+    --content novel --format EPUB --combined \
+    --label "My Novel" \
+    --combined-title "My Novel - Full Volume"
+
+# Comic / manga mode: write BOTH .cbz and .pdf per chapter
+rba https://komik.example.blogspot.com/ \
+    --content comic --format CBZ,PDF \
+    --label "Chapter 1"
+
+# Interactive picker (works on top of any of the above):
+rba https://example.blogspot.com/ -i --content novel --format EPUB
+
+# Date-range filter
+rba https://wp.example.com/ \
+    --since 2024-01-01 --until 2024-06-30 \
+    --format PDF
 ```
 
-Run `rss-blog-archiver --help` for the full flag list.
+Run `rba --help` for the full flag list.
 
 ### CLI cheatsheet
 
 | Flag                  | Description                                              |
 |-----------------------|----------------------------------------------------------|
-| `--mode`              | `PDF`, `TXT`, `MD`, `EPUB` (default `MD`)                |
+| `--content`           | `default`, `novel`, or `comic` / `manga` (default `default`) |
+| `--format`            | Comma-separated list, e.g. `MD`, `EPUB`, `CBZ,PDF`        |
+| `--mode` *(deprecated)* | Alias for single-format `--format`                     |
+| `--combined`          | Emit one combined EPUB containing all chapters           |
+| `--combined-title`    | Title for the combined EPUB                              |
+| `--combined-author`   | Author for the combined EPUB                             |
+| `-i` / `--interactive`| Launch the menu-driven picker after blog detection       |
+| `--list-labels`       | Print available labels and exit                          |
+| `--list-titles`       | Print every post title (numbered) and exit               |
 | `--output-dir`        | Base directory (default `./downloaded_posts`)            |
 | `--max-posts N`       | Stop after `N` posts                                     |
 | `--max-workers N`     | Concurrent post workers (default 5)                      |
 | `--label LABEL`       | Filter by label/tag/category                             |
-| `--list-labels`       | Print available labels and exit                          |
+| `--since YYYY-MM-DD`  | Only posts published on/after this date                  |
+| `--until YYYY-MM-DD`  | Only posts published on/before this date                 |
 | `--no-images`         | Skip image download                                      |
 | `--no-resume`         | Disable dedup / resume from `seen_urls.json`             |
-| `--rate-limit S`      | Minimum seconds between HTTP calls (default 0)           |
+| `--rate-limit S`      | Minimum seconds between HTTP calls per host (default 0)  |
 | `--timeout C R`       | Connect / read timeout (default `10 30`)                 |
 | `--metadata-format`   | `json`, `csv`, or `both`                                 |
 | `--log-file PATH`     | Write rotating UTF-8 log file                            |
 | `-v` / `-q`           | Verbose / quiet console                                  |
+
+### Content modes vs. output formats
+
+`--content` decides *what* to extract from each post; `--format` decides
+*how* it's written to disk. The two axes are independent.
+
+| Content    | Allowed formats     | Notes                                          |
+|------------|---------------------|------------------------------------------------|
+| `default`  | `MD`, `TXT`, `EPUB`, `PDF` | Phase 0 behavior                          |
+| `novel`    | `MD`, `TXT`, `EPUB`, `PDF` | Strips "Next/Prev Chapter" / "Bab" nav, detects chapter numbers, supports `--combined` |
+| `comic`    | `CBZ`, `PDF`              | Images-only; CBZ + PDF emitted per chapter (one chapter per post). PDF uses Pillow — no `wkhtmltopdf` needed. |
 
 ## How the Blogspot adapter works
 
@@ -128,14 +159,12 @@ CI runs on Ubuntu and Windows for Python 3.10, 3.11, and 3.12.
 
 ## Status
 
-Phase 0 (stabilization + Blogspot/WordPress focus). Next phases on the
-roadmap:
-- Phase 1: rate-limit policy per host, sitemap fallback, smarter
-  `Retry-After` handling.
-- Phase 2: WeasyPrint backend for pure-Python PDF, multi-post EPUB book,
-  Markdown image alt-text fixes.
-- Phase 3: async (`httpx` + `asyncio`), multi-URL batch, date filters,
-  Ghost / Substack / Medium adapters.
+Phase 1 (content modes + interactive picker + combined EPUB + per-host
+rate limiter + sitemap fallback). Next on the roadmap:
+- Phase 2: WeasyPrint backend for pure-Python PDF, Markdown image alt-text
+  fixes, smarter `Retry-After` handling.
+- Phase 3: async (`httpx` + `asyncio`), multi-URL batch, Ghost / Substack /
+  Medium adapters.
 
 ## License
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rss-blog-archiver"
-version = "0.1.0"
+version = "0.2.0"
 description = "Modern, robust RSS/feed-based archiver for Blogspot and WordPress blogs"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -52,6 +52,7 @@ dependencies = [
     "html2text>=2024.2.26",
     "tqdm>=4.66.0",
     "rich>=13.7.0",
+    "Pillow>=10.0.0",
 ]
 
 [project.optional-dependencies]
