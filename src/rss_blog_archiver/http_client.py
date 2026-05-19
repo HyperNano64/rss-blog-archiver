@@ -13,6 +13,7 @@ from __future__ import annotations
 import threading
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -33,27 +34,39 @@ DEFAULT_TIMEOUT: tuple[float, float] = (10.0, 30.0)
 
 
 class RateLimiter:
-    """Very small token-bucket / minimum-interval limiter.
+    """Minimum-interval limiter, keyed by host.
 
-    Thread-safe; cheap; works well for the scrape pattern of "many sequential
-    requests against the same host".
+    Two requests to ``a.com`` and ``b.com`` no longer block each other, but
+    two requests to the same host still respect the configured interval.
+    Thread-safe.
     """
 
     def __init__(self, min_interval: float = 0.0) -> None:
         self._min_interval = max(0.0, float(min_interval))
-        self._last_call: float = 0.0
+        self._last_call_per_host: dict[str, float] = {}
         self._lock = threading.Lock()
 
-    def acquire(self) -> None:
+    def acquire(self, url: str | None = None) -> None:
         if self._min_interval <= 0:
             return
+        host = _host_key(url)
         with self._lock:
             now = time.monotonic()
-            elapsed = now - self._last_call
+            last = self._last_call_per_host.get(host, 0.0)
+            elapsed = now - last
             if elapsed < self._min_interval:
                 sleep_for = self._min_interval - elapsed
                 time.sleep(sleep_for)
-            self._last_call = time.monotonic()
+            self._last_call_per_host[host] = time.monotonic()
+
+
+def _host_key(url: str | None) -> str:
+    if not url:
+        return ""
+    try:
+        return urlparse(url).netloc.lower()
+    except Exception:
+        return ""
 
 
 class HttpClient:
@@ -97,14 +110,14 @@ class HttpClient:
 
     def get(self, url: str, **kwargs: Any) -> requests.Response:
         kwargs.setdefault("timeout", self.timeout)
-        self._limiter.acquire()
+        self._limiter.acquire(url)
         logger.debug("GET %s", url)
         return self.session.get(url, **kwargs)
 
     def head(self, url: str, **kwargs: Any) -> requests.Response:
         kwargs.setdefault("timeout", self.timeout)
         kwargs.setdefault("allow_redirects", True)
-        self._limiter.acquire()
+        self._limiter.acquire(url)
         logger.debug("HEAD %s", url)
         return self.session.head(url, **kwargs)
 

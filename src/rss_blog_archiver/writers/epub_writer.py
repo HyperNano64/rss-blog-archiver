@@ -43,12 +43,16 @@ class EpubWriter(BaseWriter):
         if context.images_dir and context.images_dir.exists():
             body_html = self._embed_images(book, body_html, context.images_dir)
 
+        # Note: do NOT emit a leading `<?xml ... ?>` here.  lxml refuses to
+        # parse unicode strings that include an encoding declaration, which
+        # makes ebooklib's nav-generation step blow up on otherwise valid
+        # input.
         chapter.content = (
-            f"<?xml version='1.0' encoding='utf-8'?>"
             f"<!DOCTYPE html>"
             f"<html xmlns='http://www.w3.org/1999/xhtml'><head>"
-            f"<meta charset='utf-8'/><title>{post.title}</title>"
-            f"</head><body><h1>{post.title}</h1>{body_html}</body></html>"
+            f"<meta charset='utf-8'/><title>{_escape_xml(post.title)}</title>"
+            f"</head><body><h1>{_escape_xml(post.title)}</h1>"
+            f"{body_html}</body></html>"
         )
 
         book.add_item(chapter)
@@ -89,3 +93,9 @@ class EpubWriter(BaseWriter):
             html = html.replace(f"src='{image_path.name}'", f"src='{file_name}'")
             idx += 1
         return html
+
+
+def _escape_xml(text: str) -> str:
+    return (
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
