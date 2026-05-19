@@ -68,5 +68,13 @@ def setup_logging(
 
 
 def get_logger(name: str) -> logging.Logger:
-    """Return a child logger under the package namespace."""
+    """Return a child logger under the package namespace.
+
+    Accepts either a bare module name (``"scraper"``) or a dotted
+    ``__name__`` like ``"rss_blog_archiver.scraper"``; in both cases the
+    returned logger lives under the ``rss_blog_archiver`` root so it
+    inherits handlers set up by :func:`setup_logging`.
+    """
+    if name.startswith("rss_blog_archiver"):
+        return logging.getLogger(name)
     return logging.getLogger(f"rss_blog_archiver.{name}")
