@@ -1,0 +1,117 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rss-blog-archiver"
+version = "0.1.0"
+description = "Modern, robust RSS/feed-based archiver for Blogspot and WordPress blogs"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "HyperNano64" },
+]
+keywords = [
+    "rss",
+    "blogspot",
+    "blogger",
+    "wordpress",
+    "scraper",
+    "archiver",
+    "epub",
+    "pdf",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: System :: Archiving",
+]
+
+dependencies = [
+    "requests>=2.31.0",
+    "urllib3>=2.0.0",
+    "feedparser>=6.0.11",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=4.9.3",
+    "python-dateutil>=2.8.2",
+    "jinja2>=3.1.2",
+    "ebooklib>=0.18",
+    "pdfkit>=1.0.0",
+    "markdownify>=0.11.6",
+    "html2text>=2024.2.26",
+    "tqdm>=4.66.0",
+    "rich>=13.7.0",
+]
+
+[project.optional-dependencies]
+weasyprint = ["weasyprint>=60.0"]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.4.0",
+    "mypy>=1.8.0",
+    "types-requests",
+    "responses>=0.24.0",
+]
+
+[project.scripts]
+rss-blog-archiver = "rss_blog_archiver.cli:main"
+rba = "rss_blog_archiver.cli:main"
+
+[project.urls]
+Repository = "https://github.com/HyperNano64/rss-blog-archiver"
+Issues = "https://github.com/HyperNano64/rss-blog-archiver/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rss_blog_archiver"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+    "RUF",    # ruff-specific
+    "SIM",    # flake8-simplify
+]
+ignore = [
+    "E501",   # line-too-long (handled by formatter)
+    "B008",   # do not perform function call in argument defaults
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["B011"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = false
+warn_unused_ignores = true
+warn_redundant_casts = true
+ignore_missing_imports = true
