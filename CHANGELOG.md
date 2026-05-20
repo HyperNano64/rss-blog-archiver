@@ -4,6 +4,33 @@ All notable changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) loosely; each
 "Phase" is a milestone-shaped release.
 
+## [0.6.0] - Phase 3 PR #6: full-screen Textual TUI
+
+### Added
+- **Full-screen TUI (`-t` / `--tui`).** New Textual-based interface
+  for browsing labels and titles before scraping. Three-panel layout:
+  labels (left) → titles (middle, multi-select with `Space` /
+  `Ctrl+A` / `Ctrl+N`) → live preview (right, showing URL, published
+  date, author, labels, summary excerpt). `Enter` confirms the
+  selection; `Esc` cancels.
+- The TUI shares the same `SelectionResult` plumbing as the Phase 1
+  rich-based `-i` menu, so its output feeds directly into
+  `ScrapeConfig.explicit_posts`. Adapter I/O (label fetch + post
+  enumeration) runs in background workers so the UI stays responsive.
+
+### Changed
+- `--tui` and `--interactive` are mutually exclusive; both still
+  require a single URL.
+- `pytest-asyncio` added to dev dependencies (powers the new
+  `Pilot`-driven TUI tests).
+- `textual>=0.50.0` added to runtime dependencies.
+
+### Tests
+- 10 new tests across `test_tui.py` (8 covering app lifecycle,
+  selection, label filtering, preview, max-titles cap) and
+  `test_cli_multiurl.py` (2 covering `--tui` rejection rules).
+  Total test count: 164 (154 before, all still passing).
+
 ## [0.5.0] - Phase 3 PR #5: multi-URL batch + sitemap-first + combined CBZ
 
 ### Added

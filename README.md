@@ -136,6 +136,8 @@ Run `rba --help` for the full flag list.
 | `--metadata-format`   | `json`, `csv`, or `both`                                 |
 | `--pdf-backend`       | `auto`, `weasyprint`, or `wkhtmltopdf` (default `auto`)  |
 | `--prefer-sitemap`    | Use `/sitemap.xml` as primary URL source (before RSS / REST) |
+| `-i` / `--interactive`| Rich-based numbered menu before scraping (single URL)    |
+| `-t` / `--tui`        | Full-screen Textual TUI before scraping (single URL)     |
 | `--async`             | Enable async pipeline (`httpx` + `asyncio`)              |
 | `--max-concurrency N` | Per-host in-flight HTTP cap for async mode (default 8)   |
 | `--log-file PATH`     | Write rotating UTF-8 log file                            |
@@ -227,6 +229,30 @@ rba https://manga-blog.example.com/ \
 Without `--combined`, comic mode still emits one `.cbz` per post (Phase 1
 behavior).
 
+### Full-screen TUI (Phase 3)
+
+`-t` / `--tui` launches a Textual full-screen interface for browsing
+labels + titles before scraping. The screen has three panels:
+
+- **Labels** (left): select a label to filter the title list (`Enter`
+  applies). Choosing "All posts" clears the filter.
+- **Titles** (middle): multi-select with `Space`; `Ctrl+A` selects all
+  visible titles, `Ctrl+N` clears the selection.
+- **Preview** (right): live metadata for the currently-highlighted
+  title (URL, published date, author, labels, summary excerpt).
+
+Press `Enter` from the titles panel to start the scrape with the
+selected posts (or with no titles selected to scrape every post under
+the active label). `Esc` cancels.
+
+```bash
+rba https://kaoritranslation.blogspot.com/ --tui --content novel --format MD,EPUB
+```
+
+`-i` (the Phase 1 rich-based menu) stays available for terminals
+without full-screen support. `--tui` and `-i` are mutually exclusive,
+and both require a single URL.
+
 ## How the Blogspot adapter works
 
 Blogger's GData feeds endpoint (`/feeds/posts/default`) is the richest
@@ -263,13 +289,13 @@ CI runs on Ubuntu and Windows for Python 3.10, 3.11, and 3.12.
 
 ## Status
 
-Phase 3 in progress. Phase 3 lands in three reviewable PRs:
+Phase 3 lands in three reviewable PRs:
 - **PR #4** — async pipeline (`httpx` + `asyncio`), per-host
   concurrency cap. Opt-in via `--async`. *(merged)*
-- **PR #5 (this PR)** — multi-URL batch (`rba url1 url2 ...`),
+- **PR #5** — multi-URL batch (`rba url1 url2 ...`),
   sitemap-first discovery (`--prefer-sitemap`), combined CBZ across
-  posts (`--content comic --combined`).
-- **PR #6** — full-screen TUI.
+  posts (`--content comic --combined`). *(merged)*
+- **PR #6 (this PR)** — full-screen Textual TUI (`-t` / `--tui`).
 
 Phase 4 and beyond: Ghost / Substack / Medium adapters, Docker image,
 PyPI release.
