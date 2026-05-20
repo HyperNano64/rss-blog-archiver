@@ -150,6 +150,32 @@ class TestMultiUrlBatch:
         rc = cli.main(["--output-dir", str(tmp_path)])
         assert rc == 1
 
+    def test_tui_rejected_with_multiple_urls(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        """--tui + multiple URLs should fail fast with rc=2."""
+        monkeypatch.setattr(cli, "Scraper", _FakeScraper)
+        rc = cli.main([
+            "https://a.example.com/", "https://b.example.com/",
+            "--tui",
+            "--output-dir", str(tmp_path),
+        ])
+        assert rc == 2
+        assert _FakeScraper.instances == []
+
+    def test_tui_and_interactive_are_mutually_exclusive(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        """Mixing -i and --tui returns rc=2 without invoking either."""
+        monkeypatch.setattr(cli, "Scraper", _FakeScraper)
+        rc = cli.main([
+            "https://a.example.com/",
+            "-i", "--tui",
+            "--output-dir", str(tmp_path),
+        ])
+        assert rc == 2
+        assert _FakeScraper.instances == []
+
 
 class TestScrapeConfigPropagation:
     """Sanity checks: per-URL ScrapeConfig has the right shared options."""

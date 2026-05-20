@@ -87,6 +87,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Launch an interactive menu after detecting the blog.",
     )
     parser.add_argument(
+        "-t", "--tui", action="store_true",
+        help=(
+            "Launch the full-screen Textual TUI for browsing labels and "
+            "titles before scraping. Requires a single URL."
+        ),
+    )
+    parser.add_argument(
         "--list-labels", action="store_true",
         help="List available labels/tags for the blog and exit",
     )
@@ -208,10 +215,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.list_titles:
         return _print_titles(args)
 
+    if args.interactive and args.tui:
+        logger.error(
+            "--interactive and --tui are mutually exclusive; pick one."
+        )
+        return 2
     if len(args.urls) > 1 and args.interactive:
         logger.error(
             "--interactive cannot be combined with multiple URLs; "
             "run them one at a time or omit -i."
+        )
+        return 2
+    if len(args.urls) > 1 and args.tui:
+        logger.error(
+            "--tui cannot be combined with multiple URLs; "
+            "run them one at a time or omit -t."
         )
         return 2
 
@@ -275,11 +293,14 @@ def main(argv: list[str] | None = None) -> int:
             prefer_sitemap=args.prefer_sitemap,
         )
 
-        if args.interactive:
+        if args.interactive or args.tui:
             try:
-                selection = _run_interactive(args, config, content, formats)
+                if args.tui:
+                    selection = _run_tui(args, config, content, formats)
+                else:
+                    selection = _run_interactive(args, config, content, formats)
             except KeyboardInterrupt:
-                logger.warning("Interactive selection cancelled by user")
+                logger.warning("Selection cancelled by user")
                 return 130
             if selection.cancelled:
                 logger.info("Cancelled.")
@@ -381,6 +402,36 @@ def _run_interactive(
     feed_url = adapter.detection.feed_url
     return run_interactive_selection(
         adapter, feed_url=feed_url, content_mode=content, formats=formats,
+    )
+
+
+def _run_tui(
+    args: argparse.Namespace,
+    config: ScrapeConfig,
+    content: str,
+    formats: list[str],
+) -> SelectionResult:
+    # Imported lazily so the TUI dependency (textual) doesn't slow down
+    # the non-TUI CLI path or fail at startup if the user is running in
+    # a minimal environment that doesn't have a TTY.
+    from rss_blog_archiver.tui import run_tui_selection
+
+    http = HttpClient(
+        timeout=config.timeout, rate_limit_interval=config.rate_limit_interval
+    )
+    adapter = detect_adapter(
+        config.url, http, prefer_sitemap=args.prefer_sitemap,
+    )
+    if adapter.detection is None or not adapter.detection.matched:
+        logger.error("Could not detect a supported CMS for %s", config.url)
+        return SelectionResult(cancelled=True)
+    feed_url = adapter.detection.feed_url
+    return run_tui_selection(
+        adapter,
+        feed_url=feed_url,
+        content_mode=content,
+        formats=formats,
+        max_titles_per_label=config.max_posts,
     )
 
 

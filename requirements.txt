@@ -16,3 +16,4 @@ rich>=13.7.0
 Pillow>=10.0.0
 weasyprint>=60.0
 httpx>=0.27.0
+textual>=0.50.0
