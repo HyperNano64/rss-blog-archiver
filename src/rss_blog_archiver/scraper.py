@@ -41,7 +41,9 @@ from rss_blog_archiver.state import StateStore
 from rss_blog_archiver.utils import host_from_url, sanitize_filename
 from rss_blog_archiver.writers import (
     BaseWriter,
+    CombinedCbzWriter,
     CombinedChapter,
+    CombinedComicChapter,
     CombinedEpubWriter,
     WriterContext,
 )
@@ -80,6 +82,11 @@ class ScrapeConfig:
     rate_limit_interval: float = 0.0
     metadata_format: str = "json"
 
+    # Sitemap-first discovery (Phase 3 PR #5)
+    prefer_sitemap: bool = False
+    """Use ``/sitemap.xml`` as the primary post URL source. Falls back to
+    the normal Blogspot/WordPress detection if no sitemap is reachable."""
+
     # Async pipeline (Phase 3)
     use_async: bool = False
     """When True, the scraper uses ``httpx.AsyncClient`` + ``asyncio`` for
@@ -114,6 +121,58 @@ class Scraper:
         self._metadata: list[dict] = []
         self._chapters_lock = threading.Lock()
         self._chapters: list[CombinedChapter] = []
+        self._comic_chapters_lock = threading.Lock()
+        self._comic_chapters: list[CombinedComicChapter] = []
+
+    @property
+    def metadata(self) -> list[dict]:
+        """Read-only view of per-post metadata captured during a run."""
+        return list(self._metadata)
+
+    def _record_combined_chapter(
+        self,
+        post: Post,
+        html: str,
+        images_dir: Path | None,
+        chapter_number: int | None,
+    ) -> None:
+        """Record a chapter for the appropriate combined writer.
+
+        For novel/default content mode we need rendered HTML (drives the
+        EPUB book content). For comic mode we only need ordered images
+        (drives the CBZ archive).
+        """
+        if not self.config.combined:
+            return
+
+        local_images: list[Path] = []
+        if images_dir and images_dir.exists():
+            local_images = sorted(images_dir.iterdir())
+
+        if self.config.content_mode == "comic":
+            if not local_images:
+                return
+            with self._comic_chapters_lock:
+                self._comic_chapters.append(
+                    CombinedComicChapter(
+                        post=post,
+                        image_paths=local_images,
+                        chapter_number=chapter_number,
+                    )
+                )
+            return
+
+        if not html:
+            return
+        with self._chapters_lock:
+            self._chapters.append(
+                CombinedChapter(
+                    post=post,
+                    html=html,
+                    image_paths=local_images,
+                    chapter_number=chapter_number,
+                )
+            )
 
     # ------------------------------------------------------------------
     def run(self) -> None:
@@ -127,7 +186,9 @@ class Scraper:
         config = self.config
         config.output_dir.mkdir(parents=True, exist_ok=True)
 
-        adapter = detect_adapter(config.url, self.http)
+        adapter = detect_adapter(
+            config.url, self.http, prefer_sitemap=config.prefer_sitemap,
+        )
         detection = adapter.detection or AdapterDetectionResult(
             False, 0.0, config.url, config.url
         )
@@ -198,7 +259,9 @@ class Scraper:
         config = self.config
         config.output_dir.mkdir(parents=True, exist_ok=True)
 
-        adapter = detect_adapter(config.url, self.http)
+        adapter = detect_adapter(
+            config.url, self.http, prefer_sitemap=config.prefer_sitemap,
+        )
         detection = adapter.detection or AdapterDetectionResult(
             False, 0.0, config.url, config.url
         )
@@ -329,19 +392,9 @@ class Scraper:
                     writer.__class__.__name__, post.url, exc,
                 )
 
-        if config.combined and extracted.html:
-            local_images: list[Path] = []
-            if images_dir and images_dir.exists():
-                local_images = sorted(images_dir.iterdir())
-            with self._chapters_lock:
-                self._chapters.append(
-                    CombinedChapter(
-                        post=post,
-                        html=extracted.html,
-                        image_paths=local_images,
-                        chapter_number=extracted.chapter_number,
-                    )
-                )
+        self._record_combined_chapter(
+            post, extracted.html, images_dir, extracted.chapter_number,
+        )
 
         record = {
             "title": post.title,
@@ -477,19 +530,9 @@ class Scraper:
                     writer.__class__.__name__, post.url, exc,
                 )
 
-        if config.combined and extracted.html:
-            local_images: list[Path] = []
-            if images_dir and images_dir.exists():
-                local_images = sorted(images_dir.iterdir())
-            with self._chapters_lock:
-                self._chapters.append(
-                    CombinedChapter(
-                        post=post,
-                        html=extracted.html,
-                        image_paths=local_images,
-                        chapter_number=extracted.chapter_number,
-                    )
-                )
+        self._record_combined_chapter(
+            post, extracted.html, images_dir, extracted.chapter_number,
+        )
 
         record = {
             "title": post.title,
@@ -545,15 +588,34 @@ class Scraper:
 
     # ------------------------------------------------------------------
     def _maybe_write_combined(self, site_root: Path) -> None:
-        """If ``--combined`` was set, emit a single EPUB containing every chapter."""
+        """If ``--combined`` was set, emit a series-level archive.
+
+        - novel/default → single EPUB book containing every chapter
+        - comic → single CBZ archive containing every page across chapters
+        """
         config = self.config
-        if not config.combined or not self._chapters:
+        if not config.combined:
             return
         title = config.combined_title or self._guess_combined_title()
         author = config.combined_author or self._guess_combined_author()
-        writer = CombinedEpubWriter()
+
+        if config.content_mode == "comic":
+            if not self._comic_chapters:
+                return
+            try:
+                CombinedCbzWriter().write(
+                    title=title, author=author,
+                    chapters=self._comic_chapters,
+                    output_dir=site_root,
+                )
+            except Exception as exc:
+                logger.exception("Combined CBZ write failed: %s", exc)
+            return
+
+        if not self._chapters:
+            return
         try:
-            writer.write(
+            CombinedEpubWriter().write(
                 title=title, author=author, chapters=self._chapters,
                 output_dir=site_root,
             )
@@ -561,10 +623,15 @@ class Scraper:
             logger.exception("Combined EPUB write failed: %s", exc)
 
     def _guess_combined_title(self) -> str:
-        if self._chapters:
+        chapters_iter = (
+            self._comic_chapters
+            if self.config.content_mode == "comic"
+            else self._chapters
+        )
+        if chapters_iter:
             # Use the most common label (if any) or the host as a fallback.
             labels = [
-                lbl for ch in self._chapters for lbl in ch.post.labels
+                lbl for ch in chapters_iter for lbl in ch.post.labels
             ]
             if labels:
                 from collections import Counter
@@ -573,7 +640,12 @@ class Scraper:
         return host_from_url(self.config.url) or "Combined"
 
     def _guess_combined_author(self) -> str:
-        for ch in self._chapters:
+        chapters_iter = (
+            self._comic_chapters
+            if self.config.content_mode == "comic"
+            else self._chapters
+        )
+        for ch in chapters_iter:
             if ch.post.author:
                 return ch.post.author
         return ""

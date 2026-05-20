@@ -6,6 +6,10 @@ from collections.abc import Callable
 
 from rss_blog_archiver.writers.base import BaseWriter, WriterContext
 from rss_blog_archiver.writers.cbz_writer import CbzWriter
+from rss_blog_archiver.writers.combined_cbz import (
+    CombinedCbzWriter,
+    CombinedComicChapter,
+)
 from rss_blog_archiver.writers.combined_epub import CombinedChapter, CombinedEpubWriter
 from rss_blog_archiver.writers.comic_pdf_writer import ComicPdfWriter
 from rss_blog_archiver.writers.epub_writer import EpubWriter
@@ -16,7 +20,9 @@ from rss_blog_archiver.writers.text import TextWriter
 __all__ = [
     "BaseWriter",
     "CbzWriter",
+    "CombinedCbzWriter",
     "CombinedChapter",
+    "CombinedComicChapter",
     "CombinedEpubWriter",
     "ComicPdfWriter",
     "EpubWriter",
