@@ -4,6 +4,38 @@ All notable changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) loosely; each
 "Phase" is a milestone-shaped release.
 
+## [0.4.0] - Phase 3 PR #4: async pipeline
+
+### Added
+- **Async pipeline** built on `httpx.AsyncClient` + `asyncio`, opt-in
+  via `--async`. The default sync path is unchanged so existing
+  invocations behave identically.
+- `AsyncHttpClient` mirrors the sync `HttpClient` API: retry on
+  429/5xx, exponential backoff with jitter, explicit `Retry-After`
+  header honor (numeric seconds or HTTP-date), spoofed User-Agent.
+- `AsyncRateLimiter` (per-host) replaces blocking `time.sleep` with
+  `asyncio.sleep` so the event loop stays free.
+- `HostSemaphorePool` — one `asyncio.Semaphore` per host, sized by
+  `--max-concurrency` (default 8). Caps total in-flight requests
+  against the same blog regardless of how many tasks fan out.
+- `download_images_async()` — concurrent per-post image download with
+  dedup of duplicate URLs and atomic `<img src>` rewrite.
+- `Scraper.run_async()` — concurrent post processing. Adapter feed
+  iteration stays sync (sequential by nature); per-post HTML fetches
+  and sync writers run via `asyncio.to_thread` so they don't block
+  the loop.
+- CLI flags `--async` (opt-in) and `--max-concurrency N` (default 8,
+  ignored in sync mode).
+
+### Changed
+- Added `httpx>=0.27.0` to runtime dependencies.
+- Version bumped to `0.4.0`.
+
+### Tests
+- 19 new tests (`test_async_http_client.py`,
+  `test_async_image_downloader.py`) using `httpx.MockTransport`. Total
+  test count: 126 (107 before, all still passing).
+
 ## [0.3.0] - Phase 2: pure-Python PDF + Markdown alt-text fix
 
 ### Added

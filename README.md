@@ -135,6 +135,8 @@ Run `rba --help` for the full flag list.
 | `--timeout C R`       | Connect / read timeout (default `10 30`)                 |
 | `--metadata-format`   | `json`, `csv`, or `both`                                 |
 | `--pdf-backend`       | `auto`, `weasyprint`, or `wkhtmltopdf` (default `auto`)  |
+| `--async`             | Enable async pipeline (`httpx` + `asyncio`)              |
+| `--max-concurrency N` | Per-host in-flight HTTP cap for async mode (default 8)   |
 | `--log-file PATH`     | Write rotating UTF-8 log file                            |
 | `-v` / `-q`           | Verbose / quiet console                                  |
 
@@ -148,6 +150,28 @@ Run `rba --help` for the full flag list.
 | `default`  | `MD`, `TXT`, `EPUB`, `PDF` | Phase 0 behavior                          |
 | `novel`    | `MD`, `TXT`, `EPUB`, `PDF` | Strips "Next/Prev Chapter" / "Bab" nav, detects chapter numbers, supports `--combined` |
 | `comic`    | `CBZ`, `PDF`              | Images-only; CBZ + PDF emitted per chapter (one chapter per post). PDF uses Pillow — neither WeasyPrint nor wkhtmltopdf is involved. |
+
+### Async pipeline (Phase 3)
+
+The default execution path is synchronous (`requests` + `ThreadPoolExecutor`)
+and is identical to Phase 0/1/2 behavior. Adding `--async` switches the
+per-post pipeline to `httpx.AsyncClient` + `asyncio`:
+
+- image downloads within a single post run in parallel (one
+  `asyncio.Semaphore` per call),
+- post HTML fetches across posts run in parallel (one task per post),
+- a *per-host* `asyncio.Semaphore` caps total in-flight requests against
+  the same blog (`--max-concurrency`, default 8),
+- adapter feed iteration stays sync — Atom/REST pagination is sequential
+  by nature and parallelizing it gives no real win,
+- writers (Pillow, WeasyPrint, ebooklib) stay sync; the scraper offloads
+  them to threads via `asyncio.to_thread` so they don't block the loop.
+
+Example:
+
+```bash
+rba https://example.blogspot.com/ --content novel --format MD --async --max-concurrency 12
+```
 
 ## How the Blogspot adapter works
 
@@ -185,12 +209,15 @@ CI runs on Ubuntu and Windows for Python 3.10, 3.11, and 3.12.
 
 ## Status
 
-Phase 2 (WeasyPrint backend + Markdown alt-text fixes). Next on the roadmap:
-- Phase 3: async pipeline (`httpx` + `asyncio`), multi-URL batch
-  (`rba url1 url2 ...`), sitemap-first discovery, combined CBZ across
-  posts, full-screen TUI.
-- Phase 4 and beyond: Ghost / Substack / Medium adapters, Docker image,
-  PyPI release.
+Phase 3 in progress. Phase 3 lands in three reviewable PRs:
+- **PR #4 (this PR)** — async pipeline (`httpx` + `asyncio`), per-host
+  concurrency cap. Opt-in via `--async`.
+- **PR #5** — multi-URL batch (`rba url1 url2 ...`), sitemap-first
+  discovery, combined CBZ across posts.
+- **PR #6** — full-screen TUI.
+
+Phase 4 and beyond: Ghost / Substack / Medium adapters, Docker image,
+PyPI release.
 
 ## License
 

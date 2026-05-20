@@ -145,6 +145,22 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--async", dest="use_async", action="store_true",
+        help=(
+            "Use the async pipeline (httpx + asyncio). Image downloads "
+            "within a post and HTML fetches across posts run concurrently "
+            "with a per-host concurrency cap. Default: sync (off)."
+        ),
+    )
+    parser.add_argument(
+        "--max-concurrency", type=int, default=8,
+        help=(
+            "Async pipeline only: maximum number of in-flight HTTP "
+            "requests per host (default: 8). Also caps the parallel "
+            "image-download fan-out within a single post."
+        ),
+    )
+    parser.add_argument(
         "--log-file", type=Path, default=None,
         help="Append detailed logs to this file (rotating, UTF-8)",
     )
@@ -212,6 +228,8 @@ def main(argv: list[str] | None = None) -> int:
         timeout=tuple(args.timeout),  # type: ignore[arg-type]
         rate_limit_interval=args.rate_limit,
         metadata_format=args.metadata_format,
+        use_async=args.use_async,
+        max_concurrency=args.max_concurrency,
     )
 
     if args.interactive:
