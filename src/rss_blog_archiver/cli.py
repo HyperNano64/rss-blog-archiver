@@ -136,6 +136,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Format for the metadata file (default: json)",
     )
     parser.add_argument(
+        "--pdf-backend", choices=["auto", "weasyprint", "wkhtmltopdf"], default="auto",
+        help=(
+            "PDF rendering backend for default/novel modes. "
+            "'weasyprint' is pure-Python (no external binary needed). "
+            "'wkhtmltopdf' uses the legacy binary. "
+            "'auto' (default) prefers WeasyPrint and falls back to wkhtmltopdf."
+        ),
+    )
+    parser.add_argument(
         "--log-file", type=Path, default=None,
         help="Append detailed logs to this file (rotating, UTF-8)",
     )
@@ -175,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        writers = build_writers(content, formats)
+        writers = build_writers(content, formats, pdf_backend=args.pdf_backend)
     except ValueError as exc:
         logger.error("%s", exc)
         return 2

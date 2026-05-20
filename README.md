@@ -30,14 +30,20 @@ broken pagination for non-Blogspot sites, lazy-loaded images missed, ...).
 
 ```powershell
 # 1. Install Python 3.12 from https://www.python.org/downloads/
-# 2. Install wkhtmltopdf (only if you want PDF output):
-#    https://wkhtmltopdf.org/downloads.html  (pick the 64-bit installer)
-# 3. Clone & install:
+# 2. Clone & install (WeasyPrint is bundled — PDF works out of the box once GTK is present):
 git clone https://github.com/HyperNano64/rss-blog-archiver.git
 cd rss-blog-archiver
 python -m venv .venv
 .venv\Scripts\activate
 pip install -e .
+#
+# (Optional) WeasyPrint needs the GTK 3 runtime on Windows. Quickest path:
+#   https://github.com/tschoonj/GTK-for-Windows-Runtime-Environment-Installer/releases
+# After installing, restart your shell so the new DLLs are picked up.
+#
+# (Optional escape hatch) If you'd rather use the legacy wkhtmltopdf binary:
+#   1. Install from https://wkhtmltopdf.org/downloads.html  (64-bit installer)
+#   2. Run with:  rba <url> --format PDF --pdf-backend wkhtmltopdf
 ```
 
 ### Linux / macOS
@@ -46,10 +52,29 @@ pip install -e .
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -e .
-# For PDF output:
+# WeasyPrint extras (system libraries):
+sudo apt-get install libpango-1.0-0 libpangoft2-1.0-0 libcairo2   # Debian/Ubuntu
+brew install pango cairo                                          # macOS
+#
+# Optional: keep wkhtmltopdf available as an alternate backend:
 sudo apt-get install wkhtmltopdf            # Debian/Ubuntu
 brew install --cask wkhtmltopdf             # macOS
 ```
+
+### PDF backend
+
+The PDF writer for default / novel content modes supports two backends:
+
+| Backend       | What it is                                              | Pros                                       | Cons                                          |
+|---------------|---------------------------------------------------------|--------------------------------------------|-----------------------------------------------|
+| `weasyprint` (default) | Pure-Python renderer, ships with `pip install`. | No external binary path to chase down.     | Needs the GTK 3 runtime on Windows.           |
+| `wkhtmltopdf`          | Legacy binary called via `pdfkit`.              | No Python-side deps once binary is installed. | Hard-coded path issues, harder Windows setup. |
+
+Switch with `--pdf-backend {auto,weasyprint,wkhtmltopdf}`. `auto` picks
+WeasyPrint when importable, otherwise falls back to wkhtmltopdf.
+
+The **comic** content mode's PDF output is rendered with Pillow (one image
+per page) and is unaffected by `--pdf-backend`.
 
 ## Usage
 
@@ -109,6 +134,7 @@ Run `rba --help` for the full flag list.
 | `--rate-limit S`      | Minimum seconds between HTTP calls per host (default 0)  |
 | `--timeout C R`       | Connect / read timeout (default `10 30`)                 |
 | `--metadata-format`   | `json`, `csv`, or `both`                                 |
+| `--pdf-backend`       | `auto`, `weasyprint`, or `wkhtmltopdf` (default `auto`)  |
 | `--log-file PATH`     | Write rotating UTF-8 log file                            |
 | `-v` / `-q`           | Verbose / quiet console                                  |
 
@@ -121,7 +147,7 @@ Run `rba --help` for the full flag list.
 |------------|---------------------|------------------------------------------------|
 | `default`  | `MD`, `TXT`, `EPUB`, `PDF` | Phase 0 behavior                          |
 | `novel`    | `MD`, `TXT`, `EPUB`, `PDF` | Strips "Next/Prev Chapter" / "Bab" nav, detects chapter numbers, supports `--combined` |
-| `comic`    | `CBZ`, `PDF`              | Images-only; CBZ + PDF emitted per chapter (one chapter per post). PDF uses Pillow — no `wkhtmltopdf` needed. |
+| `comic`    | `CBZ`, `PDF`              | Images-only; CBZ + PDF emitted per chapter (one chapter per post). PDF uses Pillow — neither WeasyPrint nor wkhtmltopdf is involved. |
 
 ## How the Blogspot adapter works
 
@@ -159,12 +185,12 @@ CI runs on Ubuntu and Windows for Python 3.10, 3.11, and 3.12.
 
 ## Status
 
-Phase 1 (content modes + interactive picker + combined EPUB + per-host
-rate limiter + sitemap fallback). Next on the roadmap:
-- Phase 2: WeasyPrint backend for pure-Python PDF, Markdown image alt-text
-  fixes, smarter `Retry-After` handling.
-- Phase 3: async (`httpx` + `asyncio`), multi-URL batch, Ghost / Substack /
-  Medium adapters.
+Phase 2 (WeasyPrint backend + Markdown alt-text fixes). Next on the roadmap:
+- Phase 3: async pipeline (`httpx` + `asyncio`), multi-URL batch
+  (`rba url1 url2 ...`), sitemap-first discovery, combined CBZ across
+  posts, full-screen TUI.
+- Phase 4 and beyond: Ghost / Substack / Medium adapters, Docker image,
+  PyPI release.
 
 ## License
 
