@@ -31,7 +31,13 @@ def build_parser() -> argparse.ArgumentParser:
             "(text + images) and comic/manga mode (images only as CBZ / PDF)."
         ),
     )
-    parser.add_argument("url", nargs="?", help="Blog URL or feed URL")
+    parser.add_argument(
+        "urls", nargs="*", metavar="URL",
+        help=(
+            "One or more blog URLs (or feed URLs). Multiple URLs are "
+            "processed sequentially with a per-blog summary at the end."
+        ),
+    )
     parser.add_argument(
         "--output-dir", default="downloaded_posts", type=Path,
         help="Base directory for output (default: ./downloaded_posts)",
@@ -145,6 +151,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--prefer-sitemap", action="store_true",
+        help=(
+            "Use the site's sitemap as the primary post URL source instead "
+            "of RSS/REST feeds. Useful for blogs whose feed is truncated, "
+            "disabled, or rate-limited."
+        ),
+    )
+    parser.add_argument(
         "--async", dest="use_async", action="store_true",
         help=(
             "Use the async pipeline (httpx + asyncio). Image downloads "
@@ -185,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
     level = logging.DEBUG if args.verbose else logging.INFO
     setup_logging(level=level, log_file=args.log_file, quiet=args.quiet)
 
-    if not args.url:
+    if not args.urls:
         parser.print_help()
         return 1
 
@@ -194,13 +208,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.list_titles:
         return _print_titles(args)
 
+    if len(args.urls) > 1 and args.interactive:
+        logger.error(
+            "--interactive cannot be combined with multiple URLs; "
+            "run them one at a time or omit -i."
+        )
+        return 2
+
     content = "comic" if args.content == "manga" else args.content
     formats = _resolve_formats(args, content)
     if formats is None:
         return 2
 
+    # Validate format/content compatibility eagerly so we fail fast before
+    # touching the network for the first URL.
     try:
-        writers = build_writers(content, formats, pdf_backend=args.pdf_backend)
+        build_writers(content, formats, pdf_backend=args.pdf_backend)
     except ValueError as exc:
         logger.error("%s", exc)
         return 2
@@ -210,56 +233,97 @@ def main(argv: list[str] | None = None) -> int:
     if since is False or until is False:
         return 2
 
-    config = ScrapeConfig(
-        url=args.url,
-        output_dir=args.output_dir,
-        content_mode=content,
-        formats=formats,
-        combined=args.combined,
-        combined_title=args.combined_title,
-        combined_author=args.combined_author,
-        download_images=not args.no_images,
-        max_workers=args.max_workers,
-        max_posts=args.max_posts,
-        label=args.label,
-        since=since,
-        until=until,
-        resume=not args.no_resume,
-        timeout=tuple(args.timeout),  # type: ignore[arg-type]
-        rate_limit_interval=args.rate_limit,
-        metadata_format=args.metadata_format,
-        use_async=args.use_async,
-        max_concurrency=args.max_concurrency,
-    )
+    summaries: list[tuple[str, str, int | None]] = []
+    overall_rc = 0
 
-    if args.interactive:
+    for idx, url in enumerate(args.urls, start=1):
+        if len(args.urls) > 1:
+            logger.info("=" * 60)
+            logger.info("[%d/%d] %s", idx, len(args.urls), url)
+            logger.info("=" * 60)
+
+        # Each URL needs a fresh writer list because some writers carry
+        # per-blog state (e.g. CombinedEpubWriter expects a fresh book).
         try:
-            selection = _run_interactive(args, config, content, formats)
-        except KeyboardInterrupt:
-            logger.warning("Interactive selection cancelled by user")
-            return 130
-        if selection.cancelled:
-            logger.info("Cancelled.")
-            return 0
-        if selection.posts:
-            config.explicit_posts = selection.posts
-        if selection.label and not config.label:
-            config.label = selection.label
-        if selection.since and not config.since:
-            config.since = selection.since
-        if selection.until and not config.until:
-            config.until = selection.until
+            per_url_writers = build_writers(
+                content, formats, pdf_backend=args.pdf_backend,
+            )
+        except ValueError as exc:
+            logger.error("%s", exc)
+            return 2
 
-    scraper = Scraper(config, writers)
-    try:
-        scraper.run()
-    except KeyboardInterrupt:
-        logger.warning("Interrupted by user")
-        return 130
-    except Exception as exc:
-        logger.exception("Unrecoverable error: %s", exc)
-        return 1
-    return 0
+        config = ScrapeConfig(
+            url=url,
+            output_dir=args.output_dir,
+            content_mode=content,
+            formats=formats,
+            combined=args.combined,
+            combined_title=args.combined_title,
+            combined_author=args.combined_author,
+            download_images=not args.no_images,
+            max_workers=args.max_workers,
+            max_posts=args.max_posts,
+            label=args.label,
+            since=since,
+            until=until,
+            resume=not args.no_resume,
+            timeout=tuple(args.timeout),  # type: ignore[arg-type]
+            rate_limit_interval=args.rate_limit,
+            metadata_format=args.metadata_format,
+            use_async=args.use_async,
+            max_concurrency=args.max_concurrency,
+            prefer_sitemap=args.prefer_sitemap,
+        )
+
+        if args.interactive:
+            try:
+                selection = _run_interactive(args, config, content, formats)
+            except KeyboardInterrupt:
+                logger.warning("Interactive selection cancelled by user")
+                return 130
+            if selection.cancelled:
+                logger.info("Cancelled.")
+                return 0
+            if selection.posts:
+                config.explicit_posts = selection.posts
+            if selection.label and not config.label:
+                config.label = selection.label
+            if selection.since and not config.since:
+                config.since = selection.since
+            if selection.until and not config.until:
+                config.until = selection.until
+
+        scraper = Scraper(config, per_url_writers)
+        try:
+            scraper.run()
+            summaries.append((url, "ok", len(scraper.metadata)))
+        except KeyboardInterrupt:
+            logger.warning("Interrupted by user")
+            summaries.append((url, "interrupted", len(scraper.metadata)))
+            _print_summary(summaries)
+            return 130
+        except Exception as exc:
+            logger.exception("Unrecoverable error for %s: %s", url, exc)
+            summaries.append((url, f"error: {exc.__class__.__name__}", None))
+            overall_rc = 1
+            # Continue with the next URL — one bad blog should not kill
+            # the entire batch.
+            continue
+
+    if len(args.urls) > 1:
+        _print_summary(summaries)
+    return overall_rc
+
+
+def _print_summary(
+    summaries: list[tuple[str, str, int | None]],
+) -> None:
+    """Pretty-print a per-URL summary table at the end of a batch run."""
+    logger.info("")
+    logger.info("Batch summary:")
+    for url, status, count in summaries:
+        count_str = "-" if count is None else str(count)
+        logger.info("  %-12s posts=%-5s %s", status, count_str, url)
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +372,9 @@ def _run_interactive(
     http = HttpClient(
         timeout=config.timeout, rate_limit_interval=config.rate_limit_interval
     )
-    adapter = detect_adapter(config.url, http)
+    adapter = detect_adapter(
+        config.url, http, prefer_sitemap=args.prefer_sitemap,
+    )
     if adapter.detection is None or not adapter.detection.matched:
         logger.error("Could not detect a supported CMS for %s", config.url)
         return SelectionResult(cancelled=True)
@@ -319,10 +385,11 @@ def _run_interactive(
 
 
 def _print_labels(args: argparse.Namespace) -> int:
+    url = args.urls[0]
     http = HttpClient(timeout=tuple(args.timeout), rate_limit_interval=args.rate_limit)
-    adapter = detect_adapter(args.url, http)
+    adapter = detect_adapter(url, http, prefer_sitemap=args.prefer_sitemap)
     if adapter.detection is None or not adapter.detection.matched:
-        logger.error("Could not detect a supported CMS for %s", args.url)
+        logger.error("Could not detect a supported CMS for %s", url)
         return 2
     labels = adapter.fetch_labels(adapter.detection.base_url)
     if not labels:
@@ -334,10 +401,11 @@ def _print_labels(args: argparse.Namespace) -> int:
 
 
 def _print_titles(args: argparse.Namespace) -> int:
+    url = args.urls[0]
     http = HttpClient(timeout=tuple(args.timeout), rate_limit_interval=args.rate_limit)
-    adapter = detect_adapter(args.url, http)
+    adapter = detect_adapter(url, http, prefer_sitemap=args.prefer_sitemap)
     if adapter.detection is None or not adapter.detection.matched:
-        logger.error("Could not detect a supported CMS for %s", args.url)
+        logger.error("Could not detect a supported CMS for %s", url)
         return 2
     since = _parse_date_or_die(args.since, "--since")
     until = _parse_date_or_die(args.until, "--until")

@@ -135,6 +135,7 @@ Run `rba --help` for the full flag list.
 | `--timeout C R`       | Connect / read timeout (default `10 30`)                 |
 | `--metadata-format`   | `json`, `csv`, or `both`                                 |
 | `--pdf-backend`       | `auto`, `weasyprint`, or `wkhtmltopdf` (default `auto`)  |
+| `--prefer-sitemap`    | Use `/sitemap.xml` as primary URL source (before RSS / REST) |
 | `--async`             | Enable async pipeline (`httpx` + `asyncio`)              |
 | `--max-concurrency N` | Per-host in-flight HTTP cap for async mode (default 8)   |
 | `--log-file PATH`     | Write rotating UTF-8 log file                            |
@@ -173,6 +174,59 @@ Example:
 rba https://example.blogspot.com/ --content novel --format MD --async --max-concurrency 12
 ```
 
+### Multi-URL batch (Phase 3)
+
+Pass any number of URLs in one invocation — each is processed sequentially
+and gets its own folder under `--output-dir`. A failure on one URL is
+logged and the run continues; the overall exit code becomes `1` if any
+URL errored. A summary table is printed at the end.
+
+```bash
+rba \
+  https://kaoritranslation.blogspot.com/ \
+  https://another-novel.blogspot.com/ \
+  https://manga-scanlation.example.com/ \
+  --content novel --format MD,EPUB
+```
+
+`-i` / `--interactive` requires exactly one URL — the menu doesn't make
+sense for a batch.
+
+### Sitemap-first discovery (Phase 3)
+
+`--prefer-sitemap` promotes the new `SitemapAdapter` to the front of the
+CMS detection chain. It walks `/sitemap.xml`, `/sitemap_index.xml`,
+`/wp-sitemap.xml`, etc., follows sitemap-index files, and yields every
+post URL as a placeholder `Post` (with a slug-derived title). The
+content strategy then extracts real titles, dates, and bodies from each
+fetched page. Useful when:
+
+- a blog disables / truncates its RSS feed,
+- you want the full sitemap rather than the N most-recent posts,
+- the CMS is one we don't have a dedicated adapter for yet but follows
+  the sitemap standard.
+
+```bash
+rba https://feedless-blog.example.com/ --prefer-sitemap --content novel --format MD
+```
+
+### Combined CBZ for series (Phase 3)
+
+`--content comic --combined` packs every chapter's images into a single
+`.cbz` archive with continuous, zero-padded page numbering across the
+entire series. `ComicInfo.xml` at the archive root carries series-level
+metadata (`Title`, `Series`, `Writer`, `PageCount`, `Count`,
+per-chapter `Notes` manifest).
+
+```bash
+rba https://manga-blog.example.com/ \
+  --content comic --format CBZ --combined \
+  --combined-title "My Series Title"
+```
+
+Without `--combined`, comic mode still emits one `.cbz` per post (Phase 1
+behavior).
+
 ## How the Blogspot adapter works
 
 Blogger's GData feeds endpoint (`/feeds/posts/default`) is the richest
@@ -210,10 +264,11 @@ CI runs on Ubuntu and Windows for Python 3.10, 3.11, and 3.12.
 ## Status
 
 Phase 3 in progress. Phase 3 lands in three reviewable PRs:
-- **PR #4 (this PR)** — async pipeline (`httpx` + `asyncio`), per-host
-  concurrency cap. Opt-in via `--async`.
-- **PR #5** — multi-URL batch (`rba url1 url2 ...`), sitemap-first
-  discovery, combined CBZ across posts.
+- **PR #4** — async pipeline (`httpx` + `asyncio`), per-host
+  concurrency cap. Opt-in via `--async`. *(merged)*
+- **PR #5 (this PR)** — multi-URL batch (`rba url1 url2 ...`),
+  sitemap-first discovery (`--prefer-sitemap`), combined CBZ across
+  posts (`--content comic --combined`).
 - **PR #6** — full-screen TUI.
 
 Phase 4 and beyond: Ghost / Substack / Medium adapters, Docker image,

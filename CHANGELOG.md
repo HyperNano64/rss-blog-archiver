@@ -4,6 +4,43 @@ All notable changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) loosely; each
 "Phase" is a milestone-shaped release.
 
+## [0.5.0] - Phase 3 PR #5: multi-URL batch + sitemap-first + combined CBZ
+
+### Added
+- **Multi-URL batch.** `rba url1 url2 url3 …` processes each URL
+  sequentially in one invocation. A summary table is printed at the
+  end (`ok` / `error: ClassName` / `interrupted`, posts processed,
+  URL). A failure in one URL is logged but does NOT stop later URLs;
+  the overall exit code becomes `1` if any URL errored.
+- **`--prefer-sitemap` flag + `SitemapAdapter`.** When set, the new
+  adapter is tried first in `detect_adapter()`, using `/sitemap.xml`
+  / `/sitemap_index.xml` / `/wp-sitemap.xml` etc. as the primary post
+  URL source. Useful for blogs whose RSS feed is empty, truncated, or
+  disabled. Placeholder titles are derived from URL slugs; the
+  content strategy then extracts real titles from each fetched page.
+- **Combined CBZ for `--content comic --combined`.** New
+  `CombinedCbzWriter` packs every chapter's images into a single
+  `.cbz` with continuous, zero-padded page numbering (`00001.jpg` …
+  `99999.jpg`) lexically sortable across the whole series.
+  `ComicInfo.xml` at the archive root carries series-level
+  metadata (`Title` / `Series` / `Writer` / `PageCount` / `Count` /
+  per-chapter manifest in `Notes`).
+
+### Changed
+- CLI positional `url` → `urls` (`nargs="*"`). Single-URL invocations
+  remain backwards-compatible. `-i / --interactive` now requires
+  exactly one URL.
+- `Scraper` exposes a read-only `metadata` property used by the CLI
+  to populate the batch summary.
+- `_maybe_write_combined()` now picks the writer based on
+  `content_mode`: comic → `CombinedCbzWriter`, novel/default →
+  `CombinedEpubWriter`.
+
+### Tests
+- 28 new tests (`test_combined_cbz.py`, `test_sitemap_adapter.py`,
+  `test_cli_multiurl.py`, plus extra cases in `test_scraper.py`).
+  Total test count: 154 (126 before, all still passing).
+
 ## [0.4.0] - Phase 3 PR #4: async pipeline
 
 ### Added
