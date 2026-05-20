@@ -11,6 +11,7 @@ Phase 1 features:
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import json
 import threading
@@ -25,6 +26,8 @@ from tqdm import tqdm
 
 from rss_blog_archiver.adapters import BaseAdapter, detect_adapter
 from rss_blog_archiver.adapters.base import AdapterDetectionResult
+from rss_blog_archiver.async_http_client import AsyncHttpClient
+from rss_blog_archiver.async_image_downloader import download_images_async
 from rss_blog_archiver.content_modes import (
     ContentMode,
     ExtractedContent,
@@ -77,6 +80,15 @@ class ScrapeConfig:
     rate_limit_interval: float = 0.0
     metadata_format: str = "json"
 
+    # Async pipeline (Phase 3)
+    use_async: bool = False
+    """When True, the scraper uses ``httpx.AsyncClient`` + ``asyncio`` for
+    per-post processing and concurrent image downloads. Default off so
+    existing sync behavior is preserved exactly."""
+    max_concurrency: int = 8
+    """Per-host in-flight cap for the async pipeline. Also used as the
+    image-batch concurrency. Ignored in sync mode."""
+
     # Back-compat alias for callers still using ``mode``.
     @property
     def mode(self) -> str:
@@ -105,6 +117,13 @@ class Scraper:
 
     # ------------------------------------------------------------------
     def run(self) -> None:
+        """Dispatch to the sync or async pipeline based on config."""
+        if self.config.use_async:
+            asyncio.run(self.run_async())
+            return
+        self._run_sync()
+
+    def _run_sync(self) -> None:
         config = self.config
         config.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -163,6 +182,221 @@ class Scraper:
         self._persist_metadata(config.output_dir)
         self._maybe_write_combined(site_root)
         logger.info("Done. Processed %d posts.", len(self._metadata))
+
+    # ------------------------------------------------------------------
+    # Async pipeline (Phase 3)
+    # ------------------------------------------------------------------
+    async def run_async(self) -> None:
+        """Async variant of :meth:`_run_sync`.
+
+        Adapter feed iteration stays on the sync HTTP client (it is
+        sequential by nature — Atom/REST pagination cannot be
+        parallelized usefully), but per-post HTML fetches, image
+        downloads, and writer dispatch run concurrently with a per-host
+        concurrency cap.
+        """
+        config = self.config
+        config.output_dir.mkdir(parents=True, exist_ok=True)
+
+        adapter = detect_adapter(config.url, self.http)
+        detection = adapter.detection or AdapterDetectionResult(
+            False, 0.0, config.url, config.url
+        )
+        logger.info(
+            "Using %s adapter (confidence=%.2f, feed=%s) [async]",
+            adapter.name, detection.confidence, detection.feed_url,
+        )
+
+        state_path = config.output_dir / ".rba_state" / "seen_urls.json"
+        state = StateStore(state_path)
+
+        site_root = config.output_dir / sanitize_filename(
+            host_from_url(detection.base_url or config.url)
+        )
+        site_root.mkdir(parents=True, exist_ok=True)
+
+        feed_url = detection.feed_url or config.url
+        progress = tqdm(desc="posts", unit="post", total=config.max_posts)
+
+        # Gather posts up-front (feed iteration is sync) so the rest of
+        # the pipeline can fan out.
+        selected: list[tuple[int, Post]] = []
+        processed = 0
+        for index, post in enumerate(
+            self._iter_post_source(adapter, feed_url=feed_url), start=1
+        ):
+            if config.max_posts is not None and processed >= config.max_posts:
+                break
+            if not self._passes_date_filter(post):
+                continue
+            if config.resume and state.has(post.url):
+                logger.debug("Skipping seen post %s", post.url)
+                continue
+            processed += 1
+            selected.append((index, post))
+
+        async with AsyncHttpClient(
+            timeout=config.timeout,
+            rate_limit_interval=config.rate_limit_interval,
+            max_concurrency=config.max_concurrency,
+        ) as async_http:
+            post_sem = asyncio.Semaphore(max(1, config.max_concurrency))
+
+            async def worker(index: int, post: Post) -> dict | None:
+                async with post_sem:
+                    return await self._process_post_async(
+                        adapter, async_http, post, index, site_root,
+                    )
+
+            tasks = [
+                asyncio.create_task(worker(idx, post)) for idx, post in selected
+            ]
+            for coro in asyncio.as_completed(tasks):
+                try:
+                    result = await coro
+                except Exception as exc:
+                    logger.exception("Post processing failed: %s", exc)
+                    progress.update(1)
+                    continue
+                if result is not None:
+                    state.mark(result["url"], title=result.get("title"))
+                progress.update(1)
+
+        progress.close()
+        state.save()
+        self._persist_metadata(config.output_dir)
+        self._maybe_write_combined(site_root)
+        logger.info("Done. Processed %d posts.", len(self._metadata))
+
+    async def _process_post_async(
+        self,
+        adapter: BaseAdapter,
+        async_http: AsyncHttpClient,
+        post: Post,
+        index: int,
+        site_root: Path,
+    ) -> dict | None:
+        """Async per-post pipeline.
+
+        The adapter's HTML fetch is sync (``requests``-based) so we run
+        it in a thread to avoid blocking the event loop. Image downloads
+        run on ``async_http`` concurrently. Writers stay sync — they are
+        CPU-bound (Pillow / weasyprint / ebooklib) and offloading them
+        to a worker thread keeps the event loop responsive.
+        """
+        config = self.config
+        post_folder = site_root / sanitize_filename(f"{index:04d} - {post.title}")
+        post_folder.mkdir(parents=True, exist_ok=True)
+
+        soup: BeautifulSoup | None = None
+        if not post.html:
+            soup = await asyncio.to_thread(adapter.fetch_post_html, post.url)
+            if soup is None:
+                logger.warning("Could not fetch %s", post.url)
+                return None
+
+        extracted: ExtractedContent = await asyncio.to_thread(
+            self.content_strategy.extract, post, soup
+        )
+        if not extracted.html and not extracted.image_urls:
+            logger.warning("No content extracted for %s", post.url)
+            return None
+
+        images_dir: Path | None = None
+        if config.download_images and (extracted.image_urls or extracted.html):
+            images_dir = post_folder / "images"
+            images_dir.mkdir(parents=True, exist_ok=True)
+            await self._download_post_images_async(
+                extracted, post.url, images_dir, async_http,
+            )
+
+        writer_errors: list[str] = []
+        for writer in self.writers:
+            try:
+                await asyncio.to_thread(
+                    writer.write,
+                    WriterContext(
+                        post=post,
+                        content_html=extracted.html,
+                        output_dir=post_folder,
+                        images_dir=images_dir,
+                    ),
+                )
+            except Exception as exc:
+                writer_errors.append(f"{writer.__class__.__name__}: {exc}")
+                logger.warning(
+                    "Writer %s failed for %s: %s",
+                    writer.__class__.__name__, post.url, exc,
+                )
+
+        if config.combined and extracted.html:
+            local_images: list[Path] = []
+            if images_dir and images_dir.exists():
+                local_images = sorted(images_dir.iterdir())
+            with self._chapters_lock:
+                self._chapters.append(
+                    CombinedChapter(
+                        post=post,
+                        html=extracted.html,
+                        image_paths=local_images,
+                        chapter_number=extracted.chapter_number,
+                    )
+                )
+
+        record = {
+            "title": post.title,
+            "url": post.url,
+            "published": post.published.isoformat() if post.published else "",
+            "author": post.author,
+            "labels": post.labels,
+            "chapter_number": extracted.chapter_number,
+            "folder": str(post_folder.relative_to(config.output_dir)),
+            "image_count": len(extracted.image_urls),
+            "has_content": bool(extracted.html),
+            "writer_errors": writer_errors,
+        }
+        with self._metadata_lock:
+            self._metadata.append(record)
+        return record
+
+    async def _download_post_images_async(
+        self,
+        extracted: ExtractedContent,
+        base_url: str,
+        images_dir: Path,
+        async_http: AsyncHttpClient,
+    ) -> None:
+        from bs4 import BeautifulSoup as _BS
+
+        if extracted.html:
+            soup = _BS(extracted.html, "lxml")
+            await download_images_async(
+                soup,
+                base_url=base_url,
+                output_dir=images_dir,
+                http=async_http,
+                concurrency=self.config.max_concurrency,
+            )
+            extracted.html = (
+                soup.encode_contents().decode("utf-8")
+                if hasattr(soup, "encode_contents")
+                else str(soup)
+            )
+            return
+
+        synthetic = _BS(
+            "<div>"
+            + "".join(f'<img src="{u}">' for u in extracted.image_urls)
+            + "</div>",
+            "lxml",
+        )
+        await download_images_async(
+            synthetic,
+            base_url=base_url,
+            output_dir=images_dir,
+            http=async_http,
+            concurrency=self.config.max_concurrency,
+        )
 
     # ------------------------------------------------------------------
     # Post source: explicit list, or feed pagination.
