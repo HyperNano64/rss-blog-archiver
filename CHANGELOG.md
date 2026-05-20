@@ -4,6 +4,47 @@ All notable changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html) loosely; each
 "Phase" is a milestone-shaped release.
 
+## [0.3.0] - Phase 2: pure-Python PDF + Markdown alt-text fix
+
+### Added
+- **WeasyPrint PDF backend** — pure-Python renderer, no external binary
+  required. WeasyPrint is now a hard runtime dependency and is the
+  default backend for `--format PDF` in `default` / `novel` content
+  modes.
+- `--pdf-backend {auto,weasyprint,wkhtmltopdf}` CLI flag.
+  - `auto` (default): prefers WeasyPrint, falls back to wkhtmltopdf if
+    WeasyPrint is unavailable. If neither is available the writer emits
+    a clear, actionable error message instead of crashing.
+  - `weasyprint`: force pure-Python rendering.
+  - `wkhtmltopdf`: force the legacy `wkhtmltopdf` binary path.
+- Markdown writer now fills in **image alt text** before invoking
+  `markdownify`. Order of precedence:
+  1. existing non-empty `alt` attribute,
+  2. `title` attribute,
+  3. text content of the enclosing `<figure>`'s `<figcaption>`,
+  4. humanized version of the image filename (handles `src`,
+     `data-src`, `data-lazy-src`, `data-original`).
+  `[` and `]` characters are escaped so the resulting
+  `![alt](url)` syntax stays well-formed.
+
+### Changed
+- `PdfWriter` is now backend-aware: same class for both backends; the
+  HTML template and CSS are shared. CSS now declares an `@page` rule so
+  WeasyPrint paginates A4 by default.
+- `build_writers(content, formats, *, pdf_backend="auto")` and
+  `build_writer(mode, *, pdf_backend="auto")` accept an optional
+  keyword-only `pdf_backend` argument. The comic-PDF writer is
+  unaffected (it uses Pillow internally).
+- Bumped runtime requirement: `weasyprint>=60.0`.
+
+### Notes
+- On Windows, WeasyPrint relies on the GTK 3 runtime (Pango / Cairo).
+  See https://doc.courtbouillon.org/weasyprint/stable/first_steps.html
+  for the recommended install. If you would rather not install GTK,
+  pass `--pdf-backend wkhtmltopdf` to keep the existing flow.
+- `pdfkit` and `wkhtmltopdf` are still bundled / supported — switching
+  backends is a single CLI flag away.
+
 ## [0.2.0] - Phase 1: content modes, interactive picker, sitemap, combined EPUB
 
 ### Added

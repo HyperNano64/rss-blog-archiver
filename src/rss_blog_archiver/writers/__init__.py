@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from rss_blog_archiver.writers.base import BaseWriter, WriterContext
 from rss_blog_archiver.writers.cbz_writer import CbzWriter
 from rss_blog_archiver.writers.combined_epub import CombinedChapter, CombinedEpubWriter
@@ -29,7 +31,9 @@ __all__ = [
 
 # Per-post writers keyed by (content_mode, format). ``content_mode`` is one of
 # ``default`` / ``novel`` / ``comic``; ``format`` is the user-facing string.
-_WRITERS: dict[tuple[str, str], type[BaseWriter]] = {
+# Values are zero-arg callables so that PdfWriter can be parameterized with a
+# backend choice without leaking that detail into the registry.
+_WRITERS: dict[tuple[str, str], Callable[[], BaseWriter]] = {
     ("default", "MD"): MarkdownWriter,
     ("default", "TXT"): TextWriter,
     ("default", "EPUB"): EpubWriter,
@@ -43,7 +47,7 @@ _WRITERS: dict[tuple[str, str], type[BaseWriter]] = {
 }
 
 
-def build_writer(mode: str) -> BaseWriter:
+def build_writer(mode: str, *, pdf_backend: str = "auto") -> BaseWriter:
     """Backward-compatible builder (Phase 0 signature).
 
     Maps the old ``--mode`` value (PDF/TXT/MD/EPUB) onto the default content
@@ -54,14 +58,21 @@ def build_writer(mode: str) -> BaseWriter:
     if key not in _WRITERS:
         valid = sorted({k[1] for k in _WRITERS if k[0] == "default"})
         raise ValueError(f"Unknown output format {mode!r}; expected one of {valid}")
-    return _WRITERS[key]()
+    return _instantiate(_WRITERS[key], fmt, pdf_backend=pdf_backend)
 
 
-def build_writers(content: str, formats: list[str]) -> list[BaseWriter]:
+def build_writers(
+    content: str,
+    formats: list[str],
+    *,
+    pdf_backend: str = "auto",
+) -> list[BaseWriter]:
     """Return a list of per-post writers for the given content + format set.
 
     ``content`` is one of ``default`` / ``novel`` / ``comic``.
     ``formats`` is a list of uppercase format strings (e.g. ``["CBZ", "PDF"]``).
+    ``pdf_backend`` selects the PDF rendering engine for the default/novel
+    PDF writer; valid values are ``auto``, ``weasyprint``, ``wkhtmltopdf``.
 
     Raises ``ValueError`` if any (content, format) pair is unsupported.
     """
@@ -87,5 +98,18 @@ def build_writers(content: str, formats: list[str]) -> list[BaseWriter]:
                 f"Format {fmt_key!r} is not supported for --content {content_key!r}; "
                 f"valid formats: {valid}"
             )
-        writers.append(_WRITERS[pair]())
+        writers.append(_instantiate(_WRITERS[pair], fmt_key, pdf_backend=pdf_backend))
     return writers
+
+
+def _instantiate(
+    factory: Callable[[], BaseWriter], fmt: str, *, pdf_backend: str
+) -> BaseWriter:
+    """Build a writer instance, threading ``pdf_backend`` to PdfWriter only.
+
+    The comic PDF writer uses Pillow internally and is unaffected by the
+    PDF backend selection.
+    """
+    if factory is PdfWriter:
+        return PdfWriter(backend=pdf_backend)
+    return factory()
